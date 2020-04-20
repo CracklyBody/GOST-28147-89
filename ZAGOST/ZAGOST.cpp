@@ -1,8 +1,16 @@
-﻿#include <stdio.h>
+﻿#include <omp.h>
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
+#include <iostream>
+#include <fstream>
 
-#define BUFFER_SIZE 1024
 #define LSHIFT_nBIT(x, L, N) (((x << L) | (x >> (-L & (N - 1)))) & (((uint64_t)1 << N) - 1))
+//#define ENCRYPT_IN_FILE   // if u want to write encypted code to file(encryptedtomb.txt)
+//#define SMALL_MESSAGE // if u want to print message
+
+unsigned int thread_count = 5;
 
 // 1 | 4 -> 0xC
 static const uint8_t Sbox[8][16] = {
@@ -156,44 +164,90 @@ uint64_t join_32bit_to_64bit(uint32_t block32_1, uint32_t block32_2)
     return block64;
 }
 
-size_t ECBGOST(uint8_t* to, uint8_t mode, uint8_t* key256, uint8_t* from, size_t length)
+uint8_t* ECBGOST(uint8_t* to, uint8_t mode, uint8_t* key256, uint8_t* from, size_t length)
 {
     length = length % 8 == 0 ? length : length + (8 - (length % 8));
     uint32_t N1, N2, key32[8];
     split256bit_to_32bits(key256, key32);
-
-    for (size_t i = 0; i < length; i += 8)
+    uint8_t* buff = new uint8_t[length];
+    long buff_size = length / thread_count;
+    buff_size = buff_size % 8 == 0 ? buff_size : buff_size + (8 - (buff_size % 8));
+#pragma omp parallel for private(to,key256,length,N1,N2,key32) shared(buff,buff_size)num_threads(thread_count) 
+    for (long j = 0; j < thread_count; j++)
     {
-        split_64bits_to_32bits(join_8bits_to_64bits(from+i), &N1, &N2);
-        feistel_cipher(mode, &N1, &N2, key32);
-        split_64bit_to_8bit(join_32bit_to_64bit(N1, N2), (to + i));
+        for (long i = 0; i < buff_size; i += 8)
+        {
+            split_64bits_to_32bits(join_8bits_to_64bits((from+j*buff_size) + i), &N1, &N2);
+            feistel_cipher(mode, &N1, &N2, key32);
+            split_64bit_to_8bit(join_32bit_to_64bit(N1, N2), ((buff+j*buff_size) + i));
+        }
     }
-    return length;
+    return buff;
 }
 
-int main()
+unsigned int getFileLength(std::ifstream *file)
 {
-    uint8_t encrypted[BUFFER_SIZE], decrypted[BUFFER_SIZE];
-	uint8_t key256[] = "this_is_a_pasw_for_GOST_28147_89";	// 32 length
-	uint8_t buffer[BUFFER_SIZE],ch;
+    file->seekg(0, std::ios::end);
+    size_t size = file->tellg();
+    file->seekg(std::ios::beg);
+    return size;
+}
+
+int main(int argc, char* argv[])
+{
+    uint8_t *encrypted, *decrypted;
+	uint8_t key256[] = "uwus_wo_w_rassgwen_GOST_28147_89";	// 32 length
+	uint8_t *buffer,ch;
+    size_t file_size = 0;
     size_t position = 0;
+    char path[64];
+    printf("Thread count:\n");
+    std::cin >> thread_count;
+    printf("File path:\n");
+    std::cin >> path;
+    std::ifstream fi(path);
+
+    if (fi.is_open())
+        file_size = getFileLength(&fi);
+
+    buffer = new uint8_t [file_size];
+    encrypted = new uint8_t[file_size];
+    decrypted = new uint8_t[file_size];
+
     // Read input
-    while ((ch = getchar()) != '\n' && position < BUFFER_SIZE - 1)
-        buffer[position++] = ch;
-    buffer[position] = '\0';
-
-    printf("Input message:\n");
-    print_array_codes(buffer, position);
+    fi.read(reinterpret_cast<char*>(buffer), file_size);
+    buffer[file_size] = '\0';
+#ifdef SMALL_MESSAGE
+    printf("\nInput message:\n");
+    print_array_codes(buffer, file_size);
     printf("%s\n", buffer);
-    position = ECBGOST(encrypted, 'E', key256, buffer, position);
+#endif // SMALL_MESSAGE
+    double start_time = clock();
+    encrypted = ECBGOST(encrypted, 'E', key256, buffer, file_size);
+    double end_time = clock();
+    double search_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+    printf("ENCRYPT takes: %lf\n", search_time);
+#ifdef SMALL_MESSAGE
     printf("Encrypted message:\n");
-    print_array_codes(encrypted, position);
+    print_array_codes(encrypted, file_size);
     printf("%s\n", encrypted);
-
+#endif // SMALL_MESSAGE
+#ifdef ENCRYPT_IN_FILE
+    std::ofstream fo("encryptedtomb.txt", std::ios::trunc);
+    fo << encrypted;
+    fo.close();
+#endif // ENCRYPT_IN_FILE
+#ifdef SMALL_MESSAGE
     printf("Decrypted message:\n");
-    position = ECBGOST(decrypted, 'D', key256, encrypted, position);
-    print_array_codes(decrypted, position);
+    decrypted = ECBGOST(decrypted, 'D', key256, encrypted, file_size);
+    print_array_codes(decrypted, file_size);
     printf("%s\n", decrypted);
+#endif // SMALL_MESSAGE
+#ifdef ENCRYPT_IN_FILE
+    std::ofstream foo("decryptedtomb.txt", std::ios::trunc);
+    foo << decrypted;
+    foo.close();
+#endif // ENCRYPT_IN_FILE
 
 	return 0;
 }
